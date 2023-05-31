@@ -5,7 +5,6 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
-import 'package:shorebird_cli/src/aab/aab.dart';
 import 'package:shorebird_cli/src/auth_logger_mixin.dart';
 import 'package:shorebird_cli/src/command.dart';
 import 'package:shorebird_cli/src/config/shorebird_yaml.dart';
@@ -59,9 +58,7 @@ class PatchCommand extends ShorebirdCommand
     super.validators,
     HashFunction? hashFn,
     http.Client? httpClient,
-    AabDiffer? aabDiffer,
-  })  : _aabDiffer = aabDiffer ?? AabDiffer(),
-        _hashFn = hashFn ?? ((m) => sha256.convert(m).toString()),
+  })  : _hashFn = hashFn ?? ((m) => sha256.convert(m).toString()),
         _httpClient = httpClient ?? http.Client() {
     argParser
       ..addOption(
@@ -70,10 +67,10 @@ class PatchCommand extends ShorebirdCommand
       )
       ..addOption(
         'platform',
-        help: 'The platform of the release (e.g. "android").',
-        allowed: ['android'],
-        allowedHelp: {'android': 'The Android platform.'},
-        defaultsTo: 'android',
+        help: 'The platform of the release (e.g. "ios").',
+        allowed: ['ios'],
+        allowedHelp: {'ios': 'The iOS platform.'},
+        defaultsTo: 'ios',
       )
       ..addOption(
         'channel',
@@ -114,7 +111,6 @@ class PatchCommand extends ShorebirdCommand
   @override
   String get name => 'patch';
 
-  final AabDiffer _aabDiffer;
   final HashFunction _hashFn;
   final http.Client _httpClient;
 
@@ -148,14 +144,31 @@ class PatchCommand extends ShorebirdCommand
 
     await cache.updateAll();
 
-    final flavor = results['flavor'] as String?;
-    final target = results['target'] as String?;
-    final buildProgress = logger.progress('Building patch');
+    const patchPath = 'out.aot';
+    // Find the most recently modified app.dill under .dart_tool/
+    final appDill = Directory('.dart_tool')
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((f) => f.path.endsWith('app.dill'))
+        .sortedBy((f) => f.lastModifiedSync())
+        .last
+        .absolute;
+    // Turn it into a out.aot with:
+    const genSnapshot =
+        '/Users/eseidel/Documents/GitHub/engine/src/out/ios_release_unopt_arm64/clang_x64/gen_snapshot_arm64';
+    final args = [
+      '--deterministic',
+      '--snapshot-kind=app-aot-elf',
+      '--elf=out.aot',
+      appDill.path
+    ];
+    // run gen_snapshot with app.dill:
+    final genSnapshotProgress = logger.progress('Building patch');
     try {
-      await buildAppBundle(flavor: flavor, target: target);
-      buildProgress.complete();
-    } on ProcessException catch (error) {
-      buildProgress.fail('Failed to build: ${error.message}');
+      await Process.run(genSnapshot, args);
+      genSnapshotProgress.complete();
+    } catch (error) {
+      genSnapshotProgress.fail('$error');
       return ExitCode.software.code;
     }
 
@@ -177,7 +190,7 @@ class PatchCommand extends ShorebirdCommand
       return ExitCode.software.code;
     }
 
-    final appId = shorebirdYaml.getAppId(flavor: flavor);
+    final appId = shorebirdYaml.getAppId();
     final app = apps.firstWhereOrNull((a) => a.id == appId);
     if (app == null) {
       logger.err(
@@ -187,24 +200,7 @@ Did you forget to run "shorebird init"?''',
       );
       return ExitCode.software.code;
     }
-    final bundlePath = flavor != null
-        ? './build/app/outputs/bundle/${flavor}Release/app-$flavor-release.aab'
-        : './build/app/outputs/bundle/release/app-release.aab';
-
-    final releaseVersionArg = results['release-version'] as String?;
-    final String releaseVersion;
-
-    final detectReleaseVersionProgress = logger.progress(
-      'Detecting release version',
-    );
-    try {
-      releaseVersion = releaseVersionArg ??
-          await extractReleaseVersionFromAppBundle(bundlePath);
-      detectReleaseVersionProgress.complete();
-    } catch (error) {
-      detectReleaseVersionProgress.fail('$error');
-      return ExitCode.software.code;
-    }
+    const releaseVersion = '1.0.0';
 
     if (dryRun) {
       logger
@@ -284,31 +280,17 @@ https://github.com/shorebirdtech/shorebird/issues/472
     final fetchReleaseArtifactProgress = logger.progress(
       'Fetching release artifacts',
     );
-    for (final entry in architectures.entries) {
-      try {
-        final releaseArtifact = await codePushClient.getReleaseArtifact(
-          releaseId: release.id,
-          arch: entry.value.arch,
-          platform: platform,
-        );
-        releaseArtifacts[entry.key] = releaseArtifact;
-      } catch (error) {
-        fetchReleaseArtifactProgress.fail('$error');
-        return ExitCode.software.code;
-      }
-    }
-
-    ReleaseArtifact? releaseAabArtifact;
+    const arch = Arch.arm64;
     try {
-      releaseAabArtifact = await codePushClient.getReleaseArtifact(
+      final releaseArtifact = await codePushClient.getReleaseArtifact(
         releaseId: release.id,
-        arch: 'aab',
-        platform: 'android',
+        arch: 'ios',
+        platform: platform,
       );
+      releaseArtifacts[arch] = releaseArtifact;
     } catch (error) {
-      // Do nothing for now, not all releases will have an associated aab
-      // artifact.
-      // TODO(bryanoltman): Treat this as an error once all releases have an aab
+      fetchReleaseArtifactProgress.fail('$error');
+      return ExitCode.software.code;
     }
 
     fetchReleaseArtifactProgress.complete();
@@ -329,57 +311,6 @@ https://github.com/shorebirdtech/shorebird/issues/472
       }
     }
 
-    String? releaseAabPath;
-    try {
-      if (releaseAabArtifact != null) {
-        releaseAabPath = await _downloadReleaseArtifact(
-          Uri.parse(releaseAabArtifact.url),
-        );
-      }
-    } catch (error) {
-      downloadReleaseArtifactProgress.fail('$error');
-      return ExitCode.software.code;
-    }
-
-    downloadReleaseArtifactProgress.complete();
-
-    final contentDiffs = releaseAabPath == null
-        ? <AabDifferences>{}
-        : _aabDiffer.aabContentDifferences(
-            releaseAabPath,
-            bundlePath,
-          );
-
-    logger.detail('aab content differences: $contentDiffs');
-
-    if (contentDiffs.contains(AabDifferences.native)) {
-      logger
-        ..err(
-          '''The Android App Bundle appears to contain Kotlin or Java changes, which cannot be applied via a patch.''',
-        )
-        ..info(
-          yellow.wrap(
-            '''
-Please create a new release or revert those changes to create a patch.
-
-If you believe you're seeing this in error, please reach out to us for support at https://shorebird.dev/support''',
-          ),
-        );
-      return ExitCode.software.code;
-    }
-
-    if (contentDiffs.contains(AabDifferences.assets)) {
-      logger.info(
-        yellow.wrap(
-          '''⚠️ The Android App Bundle contains asset changes, which will not be included in the patch.''',
-        ),
-      );
-      final shouldContinue = logger.confirm('Continue anyways?');
-      if (!shouldContinue) {
-        return ExitCode.success.code;
-      }
-    }
-
     final patchArtifactBundles = <Arch, PatchArtifactBundle>{};
     final createDiffProgress = logger.progress('Creating artifacts');
     final sizes = <Arch, int>{};
@@ -388,28 +319,16 @@ If you believe you're seeing this in error, please reach out to us for support a
       final archMetadata = architectures[releaseArtifactPath.key]!;
       final patchArtifactPath = p.join(
         Directory.current.path,
-        'build',
-        'app',
-        'intermediates',
-        'stripped_native_libs',
-        flavor != null ? '${flavor}Release' : 'release',
-        'out',
-        'lib',
-        archMetadata.path,
-        'libapp.so',
+        patchPath,
       );
       logger.detail('Creating artifact for $patchArtifactPath');
       final patchArtifact = File(patchArtifactPath);
       final hash = _hashFn(await patchArtifact.readAsBytes());
       try {
-        final diffPath = await _createDiff(
-          releaseArtifactPath: releaseArtifactPath.value,
-          patchArtifactPath: patchArtifactPath,
-        );
-        sizes[releaseArtifactPath.key] = await File(diffPath).length();
+        sizes[releaseArtifactPath.key] = await patchArtifact.length();
         patchArtifactBundles[releaseArtifactPath.key] = PatchArtifactBundle(
           arch: archMetadata.arch,
-          path: diffPath,
+          path: patchPath,
           hash: hash,
         );
       } catch (error) {
@@ -427,7 +346,6 @@ If you believe you're seeing this in error, please reach out to us for support a
 
     final summary = [
       '''📱 App: ${lightCyan.wrap(app.displayName)} ${lightCyan.wrap('(${app.id})')}''',
-      if (flavor != null) '🍧 Flavor: ${lightCyan.wrap(flavor)}',
       '📦 Release Version: ${lightCyan.wrap(releaseVersion)}',
       '📺 Channel: ${lightCyan.wrap(channelName)}',
       '''🕹️  Platform: ${lightCyan.wrap(platform)} ${lightCyan.wrap('[${archMetadata.join(', ')}]')}''',
@@ -539,34 +457,5 @@ ${summary.join('\n')}
     await releaseArtifact.openWrite().addStream(response.stream);
 
     return releaseArtifact.path;
-  }
-
-  Future<String> _createDiff({
-    required String releaseArtifactPath,
-    required String patchArtifactPath,
-  }) async {
-    final tempDir = await Directory.systemTemp.createTemp();
-    final diffPath = p.join(tempDir.path, 'diff.patch');
-    final diffExecutable = p.join(
-      cache.getArtifactDirectory('patch').path,
-      'patch',
-    );
-    final diffArguments = [
-      releaseArtifactPath,
-      patchArtifactPath,
-      diffPath,
-    ];
-
-    final result = await process.run(
-      diffExecutable,
-      diffArguments,
-      runInShell: true,
-    );
-
-    if (result.exitCode != 0) {
-      throw Exception('Failed to create diff: ${result.stderr}');
-    }
-
-    return diffPath;
   }
 }

@@ -178,7 +178,6 @@ flutter:
       cache = _MockCache();
       shorebirdProcess = _MockShorebirdProcess();
       command = PatchCommand(
-        aabDiffer: aabDiffer,
         auth: auth,
         buildCodePushClient: ({
           required http.Client httpClient,
