@@ -2218,6 +2218,150 @@ void main() {
       });
     });
 
+    group('getOverages', () {
+      test('makes the correct request', () async {
+        codePushClient.getOverages().ignore();
+        final request = verify(() => httpClient.send(captureAny()))
+            .captured
+            .single as http.BaseRequest;
+        expect(request.method, equals('GET'));
+        expect(request.url, equals(v1('billing/overages')));
+        expect(request.hasStandardHeaders, isTrue);
+      });
+
+      test('throws an exception if the http request fails (unknown)', () async {
+        when(() => httpClient.send(any())).thenAnswer(
+          (_) async => http.StreamedResponse(
+            const Stream.empty(),
+            HttpStatus.failedDependency,
+          ),
+        );
+
+        expect(
+          codePushClient.getOverages(),
+          throwsA(
+            isA<CodePushException>().having(
+              (e) => e.message,
+              'message',
+              CodePushClient.unknownErrorMessage,
+            ),
+          ),
+        );
+      });
+
+      test('throws an exception if the http request fails', () async {
+        when(() => httpClient.send(any())).thenAnswer(
+          (_) async => http.StreamedResponse(
+            Stream.value(utf8.encode(json.encode(errorResponse.toJson()))),
+            HttpStatus.failedDependency,
+          ),
+        );
+
+        expect(
+          codePushClient.getOverages(),
+          throwsA(
+            isA<CodePushException>().having(
+              (e) => e.message,
+              'message',
+              errorResponse.message,
+            ),
+          ),
+        );
+      });
+
+      test('completes when request succeeds', () async {
+        final expected = GetOveragesResponse(patchInstallOverageLimit: 4200);
+
+        when(() => httpClient.send(any())).thenAnswer(
+          (_) async => http.StreamedResponse(
+            Stream.value(utf8.encode(json.encode(expected))),
+            HttpStatus.ok,
+          ),
+        );
+
+        final actual = await codePushClient.getOverages();
+        expect(json.encode(actual), equals(json.encode(expected)));
+      });
+    });
+
+    group('updatePatchInstallOverageLimit', () {
+      const patchInstallOverageLimit = 4200;
+
+      test('makes the correct request', () async {
+        codePushClient
+            .updatePatchInstallOverageLimit(
+              patchInstallOverageLimit: patchInstallOverageLimit,
+            )
+            .ignore();
+        final request = verify(() => httpClient.send(captureAny()))
+            .captured
+            .single as http.BaseRequest;
+        expect(request.method, equals('PUT'));
+        expect(request.url, equals(v1('billing/overages')));
+        expect(request.hasStandardHeaders, isTrue);
+      });
+
+      test('throws an exception if the http request fails (unknown)', () async {
+        when(() => httpClient.send(any())).thenAnswer(
+          (_) async => http.StreamedResponse(
+            const Stream.empty(),
+            HttpStatus.failedDependency,
+          ),
+        );
+
+        expect(
+          codePushClient.updatePatchInstallOverageLimit(
+            patchInstallOverageLimit: patchInstallOverageLimit,
+          ),
+          throwsA(
+            isA<CodePushException>().having(
+              (e) => e.message,
+              'message',
+              CodePushClient.unknownErrorMessage,
+            ),
+          ),
+        );
+      });
+
+      test('throws an exception if the http request fails', () async {
+        when(() => httpClient.send(any())).thenAnswer(
+          (_) async => http.StreamedResponse(
+            Stream.value(utf8.encode(json.encode(errorResponse.toJson()))),
+            HttpStatus.failedDependency,
+          ),
+        );
+
+        expect(
+          codePushClient.updatePatchInstallOverageLimit(
+            patchInstallOverageLimit: patchInstallOverageLimit,
+          ),
+          throwsA(
+            isA<CodePushException>().having(
+              (e) => e.message,
+              'message',
+              errorResponse.message,
+            ),
+          ),
+        );
+      });
+
+      test('completes when request succeeds', () async {
+        when(() => httpClient.send(any())).thenAnswer(
+          (_) async => http.StreamedResponse(
+            const Stream.empty(),
+            HttpStatus.noContent,
+          ),
+        );
+
+        await expectLater(
+          codePushClient.updatePatchInstallOverageLimit(
+            patchInstallOverageLimit: patchInstallOverageLimit,
+          ),
+          completes,
+        );
+      });
+    });
+
     group('close', () {
       test('closes the underlying client', () {
         codePushClient.close();

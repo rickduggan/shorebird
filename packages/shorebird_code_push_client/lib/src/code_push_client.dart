@@ -524,6 +524,37 @@ class CodePushClient {
     return DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
   }
 
+  /// Get all overage information for the associated account.
+  Future<GetOveragesResponse> getOverages() async {
+    final response = await _httpClient.get(Uri.parse('$_v1/billing/overages'));
+
+    if (response.statusCode != HttpStatus.ok) {
+      throw _parseErrorResponse(response.statusCode, response.body);
+    }
+
+    return GetOveragesResponse.fromJson(
+      json.decode(response.body) as Map<String, dynamic>,
+    );
+  }
+
+  /// Update the current user's patch install overage limit.
+  Future<void> updatePatchInstallOverageLimit({
+    required int? patchInstallOverageLimit,
+  }) async {
+    final response = await _httpClient.put(
+      Uri.parse('$_v1/billing/overages'),
+      body: json.encode(
+        UpdateOveragesRequest(
+          patchInstallOverageLimit: patchInstallOverageLimit,
+        ).toJson(),
+      ),
+    );
+
+    if (response.statusCode != HttpStatus.noContent) {
+      throw _parseErrorResponse(response.statusCode, response.body);
+    }
+  }
+
   /// Closes the client.
   void close() => _httpClient.close();
 
