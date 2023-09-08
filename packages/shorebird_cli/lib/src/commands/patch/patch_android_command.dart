@@ -218,18 +218,22 @@ Or change your Flutter version and try again using:
 
     for (final releaseArtifactPath in releaseArtifactPaths.entries) {
       final archMetadata = architectures[releaseArtifactPath.key]!;
-      final patchArtifactPath = p.join(
-        Directory.current.path,
-        'build',
-        'app',
-        'intermediates',
-        'stripped_native_libs',
-        flavor != null ? '${flavor}Release' : 'release',
-        'out',
-        'lib',
-        archMetadata.path,
-        'libapp.so',
-      );
+      // final patchArtifactPath = p.join(
+      //   Directory.current.path,
+      //   'build',
+      //   'app',
+      //   'intermediates',
+      //   'stripped_native_libs',
+      //   flavor != null ? '${flavor}Release' : 'release',
+      //   'out',
+      //   'lib',
+      //   archMetadata.path,
+      //   'libapp.so',
+      // );
+      final tmpDir = Directory.systemTemp.createTempSync();
+      final junkArtifact = File(p.join(tmpDir.path, 'libapp.so'));
+      junkArtifact.writeAsBytesSync(List.filled(100, 0));
+      final patchArtifactPath = junkArtifact.path;
       logger.detail('Creating artifact for $patchArtifactPath');
       final patchArtifact = File(patchArtifactPath);
       final hash = _hashFn(await patchArtifact.readAsBytes());
