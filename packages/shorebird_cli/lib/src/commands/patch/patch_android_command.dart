@@ -15,6 +15,7 @@ import 'package:shorebird_cli/src/formatters/formatters.dart';
 import 'package:shorebird_cli/src/http_client/http_client.dart';
 import 'package:shorebird_cli/src/logger.dart';
 import 'package:shorebird_cli/src/patch_diff_checker.dart';
+import 'package:shorebird_cli/src/shorebird_artifact_mixin.dart';
 import 'package:shorebird_cli/src/shorebird_build_mixin.dart';
 import 'package:shorebird_cli/src/shorebird_env.dart';
 import 'package:shorebird_cli/src/shorebird_flutter.dart';
@@ -28,7 +29,10 @@ import 'package:shorebird_code_push_client/shorebird_code_push_client.dart';
 /// push server.
 /// {@endtemplate}
 class PatchAndroidCommand extends ShorebirdCommand
-    with ShorebirdBuildMixin, ShorebirdReleaseVersionMixin {
+    with
+        ShorebirdBuildMixin,
+        ShorebirdReleaseVersionMixin,
+        ShorebirdArtifactMixin {
   /// {@macro patch_android_command}
   PatchAndroidCommand({
     HashFunction? hashFn,
@@ -208,12 +212,23 @@ Current Flutter Revision: $originalFlutterRevision
       }
     }
 
+    final String releaseAabPath;
+    try {
+      releaseAabPath = await downloadReleaseArtifact(
+        Uri.parse(releaseAabArtifact.url),
+        httpClient: _httpClient,
+      );
+    } catch (error) {
+      downloadReleaseArtifactProgress.fail('$error');
+      return ExitCode.software.code;
+    }
+
     downloadReleaseArtifactProgress.complete();
 
     try {
       await patchDiffChecker.confirmUnpatchableDiffsIfNecessary(
         localArtifact: File(bundlePath),
-        releaseArtifactUrl: Uri.parse(releaseAabArtifact.url),
+        releaseArtifact: File(releaseAabPath),
         archiveDiffer: _archiveDiffer,
         force: force,
       );
@@ -311,25 +326,5 @@ ${summary.join('\n')}
     );
 
     return ExitCode.success.code;
-  }
-
-  Future<String> downloadReleaseArtifact(
-    Uri uri, {
-    required http.Client httpClient,
-  }) async {
-    final request = http.Request('GET', uri);
-    final response = await httpClient.send(request);
-
-    if (response.statusCode != HttpStatus.ok) {
-      throw Exception(
-        '''Failed to download release artifact: ${response.statusCode} ${response.reasonPhrase}''',
-      );
-    }
-
-    final tempDir = await Directory.systemTemp.createTemp();
-    final releaseArtifact = File(p.join(tempDir.path, 'artifact.so'));
-    await releaseArtifact.openWrite().addStream(response.stream);
-
-    return releaseArtifact.path;
   }
 }

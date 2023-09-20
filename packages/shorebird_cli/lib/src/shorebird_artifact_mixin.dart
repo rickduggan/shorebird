@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:collection/collection.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:shorebird_cli/src/command.dart';
 import 'package:shorebird_cli/src/logger.dart';
@@ -187,5 +188,25 @@ mixin ShorebirdArtifactMixin on ShorebirdCommand {
           (a, b) =>
               a.statSync().modified.isAfter(b.statSync().modified) ? a : b,
         );
+  }
+
+  Future<String> downloadReleaseArtifact(
+    Uri uri, {
+    required http.Client httpClient,
+  }) async {
+    final request = http.Request('GET', uri);
+    final response = await httpClient.send(request);
+
+    if (response.statusCode != HttpStatus.ok) {
+      throw Exception(
+        '''Failed to download release artifact: ${response.statusCode} ${response.reasonPhrase}''',
+      );
+    }
+
+    final tempDir = await Directory.systemTemp.createTemp();
+    final releaseArtifact = File(p.join(tempDir.path, 'artifact.so'));
+    await releaseArtifact.openWrite().addStream(response.stream);
+
+    return releaseArtifact.path;
   }
 }

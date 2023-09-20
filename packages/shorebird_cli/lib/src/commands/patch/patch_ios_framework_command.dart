@@ -2,6 +2,7 @@ import 'dart:io' hide Platform;
 
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
 import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
 import 'package:platform/platform.dart';
@@ -12,6 +13,7 @@ import 'package:shorebird_cli/src/command.dart';
 import 'package:shorebird_cli/src/config/shorebird_yaml.dart';
 import 'package:shorebird_cli/src/doctor.dart';
 import 'package:shorebird_cli/src/formatters/file_size_formatter.dart';
+import 'package:shorebird_cli/src/http_client/http_client.dart';
 import 'package:shorebird_cli/src/ios.dart';
 import 'package:shorebird_cli/src/logger.dart';
 import 'package:shorebird_cli/src/patch_diff_checker.dart';
@@ -26,8 +28,11 @@ class PatchIosFrameworkCommand extends ShorebirdCommand
     with ShorebirdBuildMixin, ShorebirdArtifactMixin {
   PatchIosFrameworkCommand({
     HashFunction? hashFn,
+    http.Client? httpClient,
     IosArchiveDiffer? archiveDiffer,
   })  : _hashFn = hashFn ?? ((m) => sha256.convert(m).toString()),
+        _httpClient = httpClient ??
+            retryingHttpClient(LoggingClient(httpClient: http.Client())),
         _archiveDiffer = archiveDiffer ?? IosArchiveDiffer() {
     argParser
       ..addOption(
@@ -52,6 +57,7 @@ of the iOS app that is using this module.''',
 
   final HashFunction _hashFn;
   final IosArchiveDiffer _archiveDiffer;
+  final http.Client _httpClient;
 
   @override
   String get name => 'ios-framework-alpha';
@@ -174,10 +180,15 @@ Please re-run the release command for this version or create a new release.''');
       platform: ReleasePlatform.ios,
     );
 
+    final releaseArtifactPath = await downloadReleaseArtifact(
+      Uri.parse(releaseArtifact.url),
+      httpClient: _httpClient,
+    );
+
     try {
       await patchDiffChecker.zipAndConfirmUnpatchableDiffsIfNecessary(
         localArtifactDirectory: Directory(getAppXcframeworkPath()),
-        releaseArtifactUrl: Uri.parse(releaseArtifact.url),
+        releaseArtifact: File(releaseArtifactPath),
         archiveDiffer: _archiveDiffer,
         force: force,
       );

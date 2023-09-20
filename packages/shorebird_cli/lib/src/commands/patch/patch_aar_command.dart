@@ -214,7 +214,9 @@ Please re-run the release command for this version or create a new release.''');
             buildNumber: buildNumber,
           ),
         ),
-        releaseArtifactUrl: Uri.parse(releaseAarArtifact.url),
+        // TODO(bryanoltman)
+        releaseArtifact: File(''),
+        // releaseArtifactUrl: Uri.parse(releaseAarArtifact.url),
         archiveDiffer: _archiveDiffer,
         force: force,
       );

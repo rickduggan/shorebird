@@ -27,20 +27,11 @@ PatchDiffChecker get patchDiffChecker => read(patchDiffCheckerRef);
 /// Verifies that a patch can successfully be applied to a release artifact.
 /// {@endtemplate}
 class PatchDiffChecker {
-  /// {@macro patch_verifier}
-  PatchDiffChecker({http.Client? httpClient})
-      // coverage:ignore-start
-      : _httpClient = httpClient ??
-            retryingHttpClient(LoggingClient(httpClient: http.Client()));
-  // coverage:ignore-end
-
-  final http.Client _httpClient;
-
   /// Zips the contents of [localArtifactDirectory] to a temporary file and
   /// forwards to [confirmUnpatchableDiffsIfNecessary].
   Future<void> zipAndConfirmUnpatchableDiffsIfNecessary({
     required Directory localArtifactDirectory,
-    required Uri releaseArtifactUrl,
+    required File releaseArtifact,
     required ArchiveDiffer archiveDiffer,
     required bool force,
   }) async {
@@ -50,7 +41,7 @@ class PatchDiffChecker {
 
     return confirmUnpatchableDiffsIfNecessary(
       localArtifact: zippedFile,
-      releaseArtifactUrl: releaseArtifactUrl,
+      releaseArtifact: releaseArtifact,
       archiveDiffer: archiveDiffer,
       force: force,
     );
@@ -61,26 +52,27 @@ class PatchDiffChecker {
   /// [localArtifact].
   Future<void> confirmUnpatchableDiffsIfNecessary({
     required File localArtifact,
-    required Uri releaseArtifactUrl,
+    required File releaseArtifact,
+    // required Uri releaseArtifactUrl,
     required ArchiveDiffer archiveDiffer,
     required bool force,
   }) async {
     final progress =
         logger.progress('Verifying patch can be applied to release');
 
-    final request = http.Request('GET', releaseArtifactUrl);
-    final response = await _httpClient.send(request);
+    // final request = http.Request('GET', releaseArtifactUrl);
+    // final response = await _httpClient.send(request);
 
-    if (response.statusCode != HttpStatus.ok) {
-      progress.fail();
-      throw Exception(
-        '''Failed to download release artifact: ${response.statusCode} ${response.reasonPhrase}''',
-      );
-    }
+    // if (response.statusCode != HttpStatus.ok) {
+    //   progress.fail();
+    //   throw Exception(
+    //     '''Failed to download release artifact: ${response.statusCode} ${response.reasonPhrase}''',
+    //   );
+    // }
 
-    final tempDir = await Directory.systemTemp.createTemp();
-    final releaseArtifact = File(p.join(tempDir.path, 'release.artifact'));
-    await releaseArtifact.openWrite().addStream(response.stream);
+    // final tempDir = await Directory.systemTemp.createTemp();
+    // final releaseArtifact = File(p.join(tempDir.path, 'release.artifact'));
+    // await releaseArtifact.openWrite().addStream(response.stream);
 
     final contentDiffs = archiveDiffer.changedFiles(
       releaseArtifact.path,

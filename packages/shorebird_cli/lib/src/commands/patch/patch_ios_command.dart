@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:io' hide Platform;
 
+import 'package:archive/archive_io.dart';
+import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
 import 'package:mason_logger/mason_logger.dart';
 import 'package:path/path.dart' as p;
 import 'package:platform/platform.dart';
@@ -11,6 +14,7 @@ import 'package:shorebird_cli/src/command.dart';
 import 'package:shorebird_cli/src/config/config.dart';
 import 'package:shorebird_cli/src/doctor.dart';
 import 'package:shorebird_cli/src/formatters/file_size_formatter.dart';
+import 'package:shorebird_cli/src/http_client/http_client.dart';
 import 'package:shorebird_cli/src/ios.dart';
 import 'package:shorebird_cli/src/logger.dart';
 import 'package:shorebird_cli/src/patch_diff_checker.dart';
@@ -29,9 +33,12 @@ class PatchIosCommand extends ShorebirdCommand
   /// {@macro patch_ios_command}
   PatchIosCommand({
     HashFunction? hashFn,
+    http.Client? httpClient,
     IosArchiveDiffer? archiveDiffer,
   })  : _hashFn = hashFn ?? ((m) => sha256.convert(m).toString()),
-        _archiveDiffer = archiveDiffer ?? IosArchiveDiffer() {
+        _archiveDiffer = archiveDiffer ?? IosArchiveDiffer(),
+        _httpClient = httpClient ??
+            retryingHttpClient(LoggingClient(httpClient: http.Client())) {
     argParser
       ..addOption(
         'target',
@@ -70,6 +77,7 @@ class PatchIosCommand extends ShorebirdCommand
 
   final HashFunction _hashFn;
   final IosArchiveDiffer _archiveDiffer;
+  final http.Client _httpClient;
 
   @override
   Future<int> run() async {
@@ -184,10 +192,15 @@ Current Flutter Revision: $originalFlutterRevision
       platform: ReleasePlatform.ios,
     );
 
+    final releaseArtifactPath = await downloadReleaseArtifact(
+      Uri.parse(releaseArtifact.url),
+      httpClient: _httpClient,
+    );
+
     try {
       await patchDiffChecker.zipAndConfirmUnpatchableDiffsIfNecessary(
         localArtifactDirectory: Directory(archivePath),
-        releaseArtifactUrl: Uri.parse(releaseArtifact.url),
+        releaseArtifact: File(releaseArtifactPath),
         archiveDiffer: _archiveDiffer,
         force: force,
       );
@@ -205,15 +218,48 @@ Current Flutter Revision: $originalFlutterRevision
       return ExitCode.success.code;
     }
 
-    final aotFile = File(_aotOutputPath);
-    final aotFileSize = aotFile.statSync().size;
+    final createDiffProgress = logger.progress('Creating artifacts');
+
+    print('releaseArtifactPath: $releaseArtifactPath');
+    final tempDir = Directory.systemTemp.createTempSync();
+    final inputStream = InputFileStream(releaseArtifactPath);
+    final releaseArtifactArchive = ZipDecoder().decodeBuffer(inputStream);
+    print('extracting $releaseArtifactPath to ${tempDir.path}');
+    extractArchiveToDisk(releaseArtifactArchive, tempDir.path);
+
+    final baseReleaseDiffArtifact = tempDir
+        .listSync(recursive: true)
+        .whereType<File>()
+        .firstWhereOrNull((file) => file.path.endsWith('App.framework/App'));
+
+    if (baseReleaseDiffArtifact == null) {
+      logger.err('Could not find App.framework/App in release artifact.');
+      return ExitCode.software.code;
+    }
+
+    logger.detail('Creating artifact for $_aotOutputPath');
+    final File diffFile;
+    try {
+      diffFile = File(
+        await createDiff(
+          releaseArtifactPath: baseReleaseDiffArtifact.path,
+          patchArtifactPath: _aotOutputPath,
+        ),
+      );
+    } catch (error) {
+      createDiffProgress.fail('$error');
+      return ExitCode.software.code;
+    }
+    createDiffProgress.complete();
+
+    final diffFileSize = diffFile.statSync().size;
 
     final summary = [
       '''📱 App: ${lightCyan.wrap(app.displayName)} ${lightCyan.wrap('($appId)')}''',
       if (flavor != null) '🍧 Flavor: ${lightCyan.wrap(flavor)}',
       '📦 Release Version: ${lightCyan.wrap(releaseVersion)}',
       '📺 Channel: ${lightCyan.wrap(channelName)}',
-      '''🕹️  Platform: ${lightCyan.wrap(releasePlatform.name)} ${lightCyan.wrap('[$arch (${formatBytes(aotFileSize)})]')}''',
+      '''🕹️  Platform: ${lightCyan.wrap(releasePlatform.name)} ${lightCyan.wrap('[$arch (${formatBytes(diffFileSize)})]')}''',
     ];
 
     logger.info(
@@ -243,9 +289,9 @@ ${summary.join('\n')}
       patchArtifactBundles: {
         Arch.arm64: PatchArtifactBundle(
           arch: arch,
-          path: aotFile.path,
-          hash: _hashFn(aotFile.readAsBytesSync()),
-          size: aotFileSize,
+          path: diffFile.path,
+          hash: _hashFn(File(_aotOutputPath).readAsBytesSync()),
+          size: diffFileSize,
         ),
       },
     );
